@@ -1,48 +1,87 @@
-# TuneForge — Evidence-Grounded Hardware Performance Tuning
+# TuneForge
 
-`TuneForge` is the ML core for an evidence-grounded agent that diagnoses and tunes ML workloads for a target hardware budget. Given a workload description, a device profile, and measured profiler signals, it selects legal runtime configurations—batch size, precision, compilation, memory layout, and parallelism—to meet a latency/throughput/memory/quality objective.
+TuneForge is a small PyTorch project for learning hardware-aware ML performance tuning. It trains a surrogate model to predict a workload configuration's latency, memory use, and quality retention, then chooses the fastest configuration that meets memory and quality constraints.
 
-This is a real, bounded problem: choosing serving and training settings is expensive, highly hardware-dependent, and normally requires repeated manual profiling. Every proposed configuration is verified by an executable benchmark harness; the agent is not rewarded for plausible explanations.
+The included simulator makes experiments reproducible on a laptop. It is designed to later accept measurements from real profilers or benchmark scripts.
 
-## Why this is a better project
-
-The original GRPO/MCP idea is valuable, but an arbitrary tool-use sandbox risks reading as generic LLM post-training. TuneForge keeps the agentic and verifiable aspects while giving them a concrete systems-and-ML purpose. It also creates first-class evidence for the training skills a recruiter asked for.
-
-| Skill | Concrete project component |
-| --- | --- |
-| Architecture design | Workload/device/profile encoder with GRU/Transformer and uncertainty-aware performance heads |
-| Losses and training dynamics | Heteroscedastic latency regression, pairwise ranking, constraint-violation penalty, calibration metrics |
-| Curriculum | Synthetic clean profiles → injected measurement noise → real device traces → out-of-distribution workloads |
-| Optimizers | Controlled AdamW, Lion, and Shampoo-style preconditioner ablation at matched token/example budget |
-| Pre-training → RL | Train a performance surrogate on benchmark logs; SFT an agent on successful traces; GRPO on verifier rewards |
-| Data engine | Versioned workload/config/device records, profiling queue, deduplication, data-quality checks, hard-example mining |
-| Evaluation | Held-out workload families/devices, constraint satisfaction, regret versus exhaustive search, calibration, tool-use accuracy |
-
-## Project shape
+## Project flow
 
 ```text
-workload + device spec + profile trace
-                 │
-          performance surrogate
-       predicts latency / memory / quality
-                 │
-      agent chooses profiling or tuning tools
-                 │
-      executable benchmark verifier ──► reward + new trace
+workload + hardware + runtime configuration
+                    │
+                    ▼
+          benchmark simulator / profiler
+          latency, memory, quality labels
+                    │
+                    ▼
+           PyTorch performance surrogate
+        predicts metrics and uncertainty
+                    │
+                    ▼
+    select lowest-latency valid configuration
+                    │
+                    ▼
+     evaluate regret vs exhaustive search
 ```
 
-The initial local environment is a deterministic hardware-cost simulator so supervised training and tests are reproducible. The included code covers the performance-surrogate/data/evaluation core; the tool-using LLM is the third milestone. Swap the simulator for adapters that call `torch.profiler`, Triton benchmark scripts, vLLM, or a real serving endpoint once the data contract is stable.
+## Setup
 
-## Milestones
+Requires Python 3.10+ and PyTorch.
 
-1. **Supervised baseline:** collect configuration trials and train a calibrated latency/memory surrogate; report MAE, rank correlation, and constraint calibration.
-2. **Search policy:** compare random search, Bayesian optimization, surrogate-guided beam search, and a prompted tool agent on regret at fixed benchmark budget.
-3. **Agent finetuning:** SFT on successful tuning traces, then GRPO with exact verifier rewards (valid configuration, constraints met, improvement versus baseline). Keep LLM judging out of the primary reward.
-4. **Robustness:** test unseen workload shapes, noisy/missing counters, and a distinct GPU/CPU architecture. Report failures, not just average wins.
-5. **Scale:** distributed data collection plus DDP/FSDP after profiling demonstrates a need; quantify examples/sec, time-to-target quality, and cost.
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+```
 
-## Resume-quality claim, after measurement
+## Run
 
-> Built an evidence-grounded hardware tuning agent that used profiler-derived telemetry to select ML runtime configurations under latency, memory, and quality constraints. Trained an uncertainty-aware performance surrogate with ranking and constraint-aware losses, then fine-tuned a tool-using policy with verifier-based GRPO; evaluated regret, constraint satisfaction, and cross-workload robustness against exhaustive and random-search baselines.
+Train the default Transformer surrogate:
 
-Use real task counts, hardware, and held-out measurements in the final bullet—never placeholder percentages.
+```bash
+controlforge train --steps 1500 --architecture transformer --optimizer adamw
+```
+
+Try the MLP or optimizer alternatives:
+
+```bash
+controlforge train --steps 1500 --architecture mlp --optimizer lion
+controlforge train --steps 1500 --architecture transformer --optimizer shampoo_lite
+```
+
+Training writes the latest model and metrics to `runs/latest.pt`.
+
+Evaluate the checkpoint with simulated noisy profiling measurements:
+
+```bash
+controlforge evaluate --checkpoint runs/latest.pt --profile-noise 0.03
+```
+
+Run the tests:
+
+```bash
+pytest
+```
+
+## File map
+
+```text
+src/controlforge/
+├── cli.py          command-line train and evaluate entry points
+├── config.py       experiment configuration
+├── simulator.py    deterministic workload/hardware benchmark environment
+├── data.py         benchmark-record dataset
+├── models.py       MLP and feature-Transformer performance surrogate
+├── losses.py       uncertainty-aware regression and ranking losses
+├── optim.py        AdamW, Lion, and Shampoo-lite optimizer selection
+├── train.py        training loop and noise curriculum
+└── evaluate.py     regret and constraint-satisfaction evaluation
+
+tests/test_core.py  core dataset, model, simulator, and evaluator checks
+```
+
+## Metrics
+
+- `mean_regret`: latency gap between the selected configuration and the best valid configuration.
+- `constraint_satisfaction`: fraction of selections meeting memory and quality requirements.
+- `selected_latency_mae_ms`: latency prediction error for the selected configuration.
