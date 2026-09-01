@@ -1,6 +1,6 @@
 # TuneForge
 
-TuneForge is a small PyTorch project for learning hardware-aware ML performance tuning. It trains a surrogate model to predict a workload configuration's latency, memory use, and quality retention, then chooses the fastest configuration that meets memory and quality constraints.
+TuneForge is platform for hardware-aware ML performance tuning. It trains a surrogate model to predict a workload configuration's latency, memory use, and quality retention, then chooses the fastest configuration that meets memory and quality constraints.
 
 The included simulator makes experiments reproducible on a laptop. It is designed to later accept measurements from real profilers or benchmark scripts.
 
